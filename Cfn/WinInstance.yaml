@@ -1,0 +1,155 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Deploy Windows Instances(Bastion Client and AD)
+#----------------------------------------------
+Parameters:
+  #------------------
+  Win2012AmiId: 
+    Description: Windows Server 2012R2 AMI ID
+    Type: String
+  Win2008AmiId: 
+    Description: Windows Server 2008R2 AMI ID
+    Type: String
+  KeyName:
+    Type: String
+  InstanceType:
+    Type: String
+    Default: t3a.xlarge
+  Win2008InstanceType:
+    Type: String
+    Default: t2.xlarge
+  ResourceAdPrivateIP:
+    Type: String
+    Default: 10.1.64.20
+Resources:
+  #------------------ bastion
+  BastionServerProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub FSx-BastionServerProfile-${AWS::StackName}
+      Path: "/"
+      Roles:
+        - !Ref BastionServerRole
+  BastionServerRole:
+    Type: AWS::IAM::Role
+    Properties: 
+      Path: "/"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEC2ReadOnlyAccess
+  BastionServer:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref Win2012AmiId
+      InstanceType: !Ref InstanceType
+      Monitoring: yes
+      KeyName: !Ref KeyName
+      IamInstanceProfile: !Ref BastionServerProfile
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: true
+          DeviceIndex: 0
+          SubnetId:
+            Fn::ImportValue: FSx-VPC-ExternalFrontSubnet1Id
+          GroupSet:
+            - Fn::ImportValue: FSx-VPC-ExternalBastionSGId
+            - Fn::ImportValue: FSx-VPC-ExternalRdpSGId
+      Tags:
+        - Key: Name
+          Value: ExternalBastion
+  BastionServerRecoveryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: AutoRecovery for the Bastion Server.
+      Namespace: AWS/EC2
+      MetricName: StatusCheckFailed_System
+      Statistic: Minimum
+      Period: 60
+      EvaluationPeriods: 1
+      ComparisonOperator: GreaterThanThreshold
+      Threshold: 0
+      AlarmActions:
+      - !Sub "arn:aws:automate:${AWS::Region}:ec2:recover"
+      - !Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:admin"
+      Dimensions:
+      - Name: InstanceId
+        Value: !Ref BastionServer
+    DependsOn: BastionServer
+  #------------------ Client @ Resouce domain
+  ResourceClient:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref Win2012AmiId
+      InstanceType: !Ref InstanceType
+      Monitoring: yes
+      KeyName: !Ref KeyName
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: true
+          DeviceIndex: 0
+          SubnetId:
+            Fn::ImportValue: FSx-VPC-ExternalFrontSubnet1Id
+          GroupSet:
+            - Fn::ImportValue: FSx-VPC-ExternalClientSGId
+            - Fn::ImportValue: FSx-VPC-ExternalRdpSGId
+      Tags:
+        - Key: Name
+          Value: External-Client
+  ClientRecoveryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: AutoRecovery for the ResourceClient Server.
+      Namespace: AWS/EC2
+      MetricName: StatusCheckFailed_System
+      Statistic: Minimum
+      Period: 60
+      EvaluationPeriods: 1
+      ComparisonOperator: GreaterThanThreshold
+      Threshold: 0
+      AlarmActions:
+      - !Sub "arn:aws:automate:${AWS::Region}:ec2:recover"
+      - !Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:admin"
+      Dimensions:
+      - Name: InstanceId
+        Value: !Ref ResourceClient
+    DependsOn: ResourceClient
+  #------------------ AD @ Resouce domain
+  ResourceAd:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref Win2008AmiId
+      InstanceType: !Ref Win2008InstanceType
+      Monitoring: yes
+      KeyName: !Ref KeyName
+      PrivateIpAddress: !Ref ResourceAdPrivateIP
+      SecurityGroupIds:
+        - Fn::ImportValue: FSx-SG-InternalAdSGId
+        - Fn::ImportValue: FSx-VPC-InternalRdpSGId
+      SubnetId:
+        Fn::ImportValue: FSx-VPC-InternalFrontSubnet1Id
+      Tags:
+        - Key: Name
+          Value: Internal-ResouceAd
+  ResourceAdRecoveryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: AutoRecovery for the ResourceAd Server.
+      Namespace: AWS/EC2
+      MetricName: StatusCheckFailed_System
+      Statistic: Minimum
+      Period: 60
+      EvaluationPeriods: 1
+      ComparisonOperator: GreaterThanThreshold
+      Threshold: 0
+      AlarmActions:
+      - !Sub "arn:aws:automate:${AWS::Region}:ec2:recover"
+      - !Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:admin"
+      Dimensions:
+      - Name: InstanceId
+        Value: !Ref ResourceAd
+    DependsOn: ResourceAd
